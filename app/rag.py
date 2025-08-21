@@ -10,7 +10,7 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import TextLoader
 from langchain_chroma import Chroma
 from langchain_ollama import ChatOllama
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.schema import Document
 from rank_bm25 import BM25Okapi
 from tqdm import tqdm
@@ -50,7 +50,6 @@ class RAGService:
 			model_name=settings.EMBEDDING_MODEL,
 			model_kwargs={
 				'device': device,
-				'torch_dtype': torch.float16 if device == "cuda" else torch.float32,  # Use FP16 for GPU
 			},
 			encode_kwargs={
 				'normalize_embeddings': True,
