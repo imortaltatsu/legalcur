@@ -1,11 +1,11 @@
 from pydantic_settings import BaseSettings
-from typing import List
+from typing import List, ClassVar
 
 class ProductionSettings(BaseSettings):
     """Production configuration settings"""
     
-    # Domain configuration
-    DOMAIN = "legal.adityaberry.me"
+    # Domain configuration - using ClassVar since this isn't a configurable field
+    DOMAIN: ClassVar[str] = "legal.adityaberry.me"
     
     # CORS settings - allow the domain and all origins for tunnel usage
     CORS_ORIGINS: List[str] = [
