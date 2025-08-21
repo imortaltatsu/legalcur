@@ -16,6 +16,8 @@ dependencies = [
     "transformers>=4.35.0",
     "sentence-transformers>=2.2.0",
     "torch>=2.0.0",
+    "accelerate>=0.25.0",
+    "torchvision>=0.15.0",
 ]
 
 [project.optional-dependencies]

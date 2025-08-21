@@ -13,6 +13,11 @@ class Settings(BaseSettings):
 	LLM_MODEL: str = Field(default="gpt-oss:120b")
 	EMBEDDING_MODEL: str = Field(default="sentence-transformers/all-MiniLM-L6-v2")
 
+	# GPU Configuration for embeddings
+	USE_CUDA: bool = Field(default=True)
+	GPU_DEVICE: str = Field(default="cuda:0")  # Primary GPU
+	BATCH_SIZE: int = Field(default=64)  # Larger batch size for GPU processing
+
 	# Storage and data - relative paths
 	DATA_DIR: Path = Field(default=Path("data"))
 	AILA_DIR: Path = Field(default=Path("data/AILA_2019_dataset"))

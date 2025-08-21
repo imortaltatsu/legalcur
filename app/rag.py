@@ -4,6 +4,7 @@ from typing import List, Tuple, Dict, Any
 from pathlib import Path
 import json
 import logging
+import torch
 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import TextLoader
@@ -13,6 +14,7 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.schema import Document
 from rank_bm25 import BM25Okapi
 from tqdm import tqdm
+from accelerate import Accelerator
 
 from .config import settings
 
@@ -25,6 +27,11 @@ class RAGService:
 	def __init__(self) -> None:
 		logger.info("Initializing RAG Service...")
 		
+		# Initialize accelerator for multi-GPU support
+		self.accelerator = Accelerator()
+		logger.info(f"Using device: {self.accelerator.device}")
+		logger.info(f"Number of processes: {self.accelerator.num_processes}")
+		
 		# Initialize Ollama client for LLM
 		self.llm = ChatOllama(
 			model=settings.LLM_MODEL,
@@ -33,11 +40,23 @@ class RAGService:
 			timeout=settings.OLLAMA_REQUEST_TIMEOUT_S,
 		)
 		
-		# Initialize local embedding model using transformers
+		# Initialize local embedding model using transformers with GPU optimization
+		device = "cuda" if settings.USE_CUDA and torch.cuda.is_available() else "cpu"
+		if device == "cuda":
+			logger.info(f"CUDA available: {torch.cuda.get_device_name(0)}")
+			logger.info(f"Number of GPUs: {torch.cuda.device_count()}")
+		
 		self.embeddings = HuggingFaceEmbeddings(
 			model_name=settings.EMBEDDING_MODEL,
-			model_kwargs={'device': 'cpu'},  # Use CPU by default, can be changed to 'cuda' if available
-			encode_kwargs={'normalize_embeddings': True}
+			model_kwargs={
+				'device': device,
+				'torch_dtype': torch.float16 if device == "cuda" else torch.float32,  # Use FP16 for GPU
+			},
+			encode_kwargs={
+				'normalize_embeddings': True,
+				'batch_size': settings.BATCH_SIZE,
+				'show_progress_bar': True,
+			}
 		)
 		
 		# Text processing
@@ -429,16 +448,22 @@ Content:
 		chunks = self.text_splitter.split_documents(all_docs)
 		logger.info(f"Created {len(chunks)} chunks from {len(all_docs)} documents")
 		
-		# Add to vector store with progress bar
+		# Add to vector store with progress bar - optimized for GPU
 		try:
 			logger.info("Adding documents to vector store...")
 			vs = self._get_vectorstore()
 			
-			# Process in batches for better progress tracking
-			batch_size = 100
-			for i in tqdm(range(0, len(chunks), batch_size), desc="Adding to vector store", unit="batch"):
-				batch = chunks[i:i + batch_size]
+			# Use larger batch size for GPU processing
+			gpu_batch_size = settings.BATCH_SIZE * 2 if torch.cuda.is_available() else 100
+			logger.info(f"Using batch size: {gpu_batch_size}")
+			
+			for i in tqdm(range(0, len(chunks), gpu_batch_size), desc="Adding to vector store", unit="batch"):
+				batch = chunks[i:i + gpu_batch_size]
 				vs.add_documents(batch)
+				
+				# Clear GPU cache periodically to prevent OOM
+				if torch.cuda.is_available() and i % (gpu_batch_size * 4) == 0:
+					torch.cuda.empty_cache()
 			
 			vs.persist()
 			logger.info("Documents added to vector store")
