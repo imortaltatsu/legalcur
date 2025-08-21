@@ -10,7 +10,7 @@ from .config import settings
 from langchain_ollama import ChatOllama
 
 
-app = FastAPI(title="Law RAG API", version="0.1.3")
+app = FastAPI(title="Law RAG API", version="0.1.4")
 _rag_service = RAGService()
 
 
@@ -65,12 +65,14 @@ async def view_config():
 		"embedding_model": settings.EMBEDDING_MODEL,
 		"collection": settings.COLLECTION_NAME,
 		"chroma_dir": str(settings.CHROMA_DIR),
+		"cases_dir": str(settings.CASES_DIR),
+		"statutes_dir": str(settings.STATUTES_DIR),
 	}
 
 
 @app.post("/query")
 async def query_endpoint(req: QueryRequest, rag: RAGService = Depends(get_rag_service)):
-	docs = rag.asearch(req.query, k=req.k)
+	docs = rag.search(req.query, k=req.k)
 	answer = rag.generate_answer(req.query, docs)
 	sources = [d.metadata.get("source", "unknown") for d in docs]
 	return {"answer": answer, "sources": sources}
@@ -78,7 +80,7 @@ async def query_endpoint(req: QueryRequest, rag: RAGService = Depends(get_rag_se
 
 @app.post("/search")
 async def search_only(req: QueryRequest, rag: RAGService = Depends(get_rag_service)):
-	docs = rag.asearch(req.query, k=req.k)
+	docs = rag.search(req.query, k=req.k)
 	return {
 		"matches": [
 			{"source": d.metadata.get("source", "unknown"), "preview": d.page_content[:240]}
@@ -102,7 +104,7 @@ async def chat_endpoint(req: ChatRequest, rag: RAGService = Depends(get_rag_serv
 	last_user = user_messages[-1].content
 
 	# Retrieve context based on the last user message
-	docs = rag.asearch(last_user, k=req.k)
+	docs = rag.search(last_user, k=req.k)
 	context_blocks = []
 	for i, d in enumerate(docs, start=1):
 		snippet = d.page_content[:1200]
