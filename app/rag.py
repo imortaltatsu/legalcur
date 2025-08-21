@@ -11,6 +11,7 @@ from langchain_chroma import Chroma
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langchain.schema import Document
 from rank_bm25 import BM25Okapi
+from tqdm import tqdm
 
 from .config import settings
 
@@ -61,6 +62,140 @@ class RAGService:
 		
 		logger.info("RAG Service initialized successfully")
 
+	def _get_master_prompt(self, query_type: str = "general") -> str:
+		"""Get the master prompt for legal assistance."""
+		base_prompt = """You are an expert legal research assistant with comprehensive knowledge of legal systems, statutes, case law, and legal procedures. You provide accurate, well-reasoned legal analysis based on the provided context.
+
+CORE CAPABILITIES:
+- Legal Research & Analysis
+- Statute Interpretation
+- Case Law Analysis
+- Legal Procedure Guidance
+- Contract Review & Analysis
+- Regulatory Compliance
+- Legal Document Drafting
+- Risk Assessment
+
+RESPONSE GUIDELINES:
+1. **Accuracy First**: Base all responses on the provided legal context
+2. **Citation Required**: Always cite specific documents using [Doc N] format
+3. **Legal Precision**: Use precise legal terminology and concepts
+4. **Practical Application**: Provide actionable legal advice when possible
+5. **Risk Awareness**: Highlight potential legal risks and limitations
+6. **Professional Tone**: Maintain professional, objective legal analysis
+7. **Context Limitations**: Acknowledge when context is insufficient
+
+CONTEXT USAGE:
+- Analyze provided legal documents thoroughly
+- Cross-reference statutes with case law when available
+- Identify key legal principles and precedents
+- Note any conflicts or ambiguities in the law
+- Suggest relevant legal considerations
+
+DISCLAIMER: This analysis is based on the provided context and should not replace professional legal counsel. Users should consult qualified attorneys for specific legal advice."""
+
+		# Specialized prompts for different query types
+		specialized_prompts = {
+			"statute": """SPECIALIZATION: STATUTE ANALYSIS
+Focus on:
+- Statutory interpretation principles
+- Legislative intent analysis
+- Statutory construction rules
+- Amendment history and implications
+- Regulatory framework connections""",
+			
+			"case": """SPECIALIZATION: CASE LAW ANALYSIS
+Focus on:
+- Precedent establishment and application
+- Fact pattern analysis
+- Legal reasoning and holdings
+- Dissenting opinions and implications
+- Case law evolution and trends""",
+			
+			"procedure": """SPECIALIZATION: LEGAL PROCEDURE
+Focus on:
+- Procedural requirements and timelines
+- Jurisdictional considerations
+- Filing requirements and forms
+- Evidence standards and admissibility
+- Appeal processes and deadlines""",
+			
+			"contract": """SPECIALIZATION: CONTRACT LAW
+Focus on:
+- Contract formation and validity
+- Terms interpretation and enforcement
+- Breach analysis and remedies
+- Risk allocation and liability
+- Regulatory compliance requirements""",
+			
+			"compliance": """SPECIALIZATION: REGULATORY COMPLIANCE
+Focus on:
+- Regulatory framework analysis
+- Compliance requirements and deadlines
+- Enforcement mechanisms and penalties
+- Risk assessment and mitigation
+- Industry-specific considerations"""
+		}
+		
+		specialized = specialized_prompts.get(query_type, "")
+		if specialized:
+			base_prompt += f"\n\n{specialized}"
+		
+		return base_prompt
+
+	def _analyze_query_type(self, query: str) -> str:
+		"""Analyze query to determine the type of legal assistance needed."""
+		query_lower = query.lower()
+		
+		# Statute-related keywords
+		if any(word in query_lower for word in ["statute", "law", "act", "code", "regulation", "ordinance", "legislation"]):
+			return "statute"
+		
+		# Case law keywords
+		if any(word in query_lower for word in ["case", "precedent", "ruling", "decision", "judgment", "court", "appeal"]):
+			return "case"
+		
+		# Procedure keywords
+		if any(word in query_lower for word in ["procedure", "process", "filing", "deadline", "jurisdiction", "venue", "service"]):
+			return "procedure"
+		
+		# Contract keywords
+		if any(word in query_lower for word in ["contract", "agreement", "breach", "enforcement", "terms", "liability"]):
+			return "contract"
+		
+		# Compliance keywords
+		if any(word in query_lower for word in ["compliance", "regulatory", "enforcement", "penalty", "violation", "audit"]):
+			return "compliance"
+		
+		return "general"
+
+	def _format_context_for_prompt(self, docs: List[Document]) -> str:
+		"""Format retrieved documents into a structured context for the prompt."""
+		if not docs:
+			return "No relevant legal documents found in the provided context."
+		
+		context_blocks = []
+		for i, doc in enumerate(docs, 1):
+			# Extract key information
+			source = doc.metadata.get("source", "unknown")
+			file_name = doc.metadata.get("file_name", "unknown")
+			
+			# Clean and format content
+			content = doc.page_content.strip()
+			if len(content) > 1500:
+				content = content[:1500] + "..."
+			
+			# Create structured block
+			block = f"""[Document {i}]
+Source: {file_name}
+Path: {source}
+Content:
+{content}
+---"""
+			context_blocks.append(block)
+		
+		return "\n\n".join(context_blocks)
+
 	def _load_existing_data(self) -> None:
 		"""Load existing BM25 index and corpus if available."""
 		if self.corpus_file.exists():
@@ -110,7 +245,7 @@ class RAGService:
 		"""Save documents to corpus file."""
 		try:
 			with self.corpus_file.open("w", encoding="utf-8") as f:
-				for doc in docs:
+				for doc in tqdm(docs, desc="Saving to corpus", unit="doc"):
 					record = {
 						"text": doc.page_content,
 						"source": doc.metadata.get("source", "unknown"),
@@ -225,9 +360,10 @@ class RAGService:
 			logger.warning("No files found in AILA dataset directories")
 			return {"files": 0, "chunks": 0}
 		
-		# Process all files
+		# Process all files with progress bar
+		logger.info("Loading documents from files...")
 		all_docs = []
-		for file_path in all_files:
+		for file_path in tqdm(all_files, desc="Loading files", unit="file"):
 			docs = self._load_document(file_path)
 			all_docs.extend(docs)
 		
@@ -235,23 +371,33 @@ class RAGService:
 			logger.warning("No documents loaded from files")
 			return {"files": 0, "chunks": 0}
 		
-		# Split documents into chunks
+		# Split documents into chunks with progress bar
+		logger.info("Splitting documents into chunks...")
 		chunks = self.text_splitter.split_documents(all_docs)
 		logger.info(f"Created {len(chunks)} chunks from {len(all_docs)} documents")
 		
-		# Add to vector store
+		# Add to vector store with progress bar
 		try:
+			logger.info("Adding documents to vector store...")
 			vs = self._get_vectorstore()
-			vs.add_documents(chunks)
+			
+			# Process in batches for better progress tracking
+			batch_size = 100
+			for i in tqdm(range(0, len(chunks), batch_size), desc="Adding to vector store", unit="batch"):
+				batch = chunks[i:i + batch_size]
+				vs.add_documents(batch)
+			
 			vs.persist()
 			logger.info("Documents added to vector store")
 		except Exception as e:
 			logger.error(f"Error adding to vector store: {e}")
 		
 		# Save to corpus for BM25
+		logger.info("Saving documents to corpus...")
 		self._save_corpus(chunks)
 		
 		# Build BM25 index
+		logger.info("Building BM25 index...")
 		self._load_bm25()
 		
 		return {"files": len(all_files), "chunks": len(chunks)}
@@ -351,43 +497,47 @@ class RAGService:
 		return [item["doc"] for item in sorted_docs[:k]]
 
 	def generate_answer(self, query: str, docs: List[Document]) -> str:
-		"""Generate an answer using retrieved documents."""
+		"""Generate a comprehensive legal answer using retrieved documents."""
 		if not docs:
-			return "I couldn't find any relevant documents to answer your question."
+			return "I couldn't find any relevant legal documents to answer your question. Please provide more specific details or consult with a qualified legal professional."
 		
-		# Prepare context
-		context_blocks = []
-		for i, doc in enumerate(docs, 1):
-			snippet = doc.page_content[:1200]
-			source = doc.metadata.get("source", "unknown")
-			file_name = doc.metadata.get("file_name", "unknown")
-			
-			context_blocks.append(f"[Doc {i}] Source: {file_name}\n{snippet}")
+		# Analyze query type for specialized prompting
+		query_type = self._analyze_query_type(query)
+		logger.info(f"Query type detected: {query_type}")
 		
-		context = "\n\n".join(context_blocks)
+		# Get master prompt
+		master_prompt = self._get_master_prompt(query_type)
 		
-		# Create prompt
-		prompt = f"""You are a legal research assistant. Answer the question using only the provided context.
+		# Format context
+		context = self._format_context_for_prompt(docs)
+		
+		# Create comprehensive prompt
+		prompt = f"""{master_prompt}
 
-Question: {query}
+LEGAL QUERY:
+{query}
 
-Context:
+RELEVANT LEGAL CONTEXT:
 {context}
 
-Instructions:
-- Answer based ONLY on the provided context
-- Include [Doc N] citations for any information you use
-- If the context doesn't contain enough information, say so
-- Be concise and accurate
+ANALYSIS INSTRUCTIONS:
+1. **Comprehensive Analysis**: Provide a thorough legal analysis based on the context
+2. **Statutory Framework**: Identify and explain relevant statutes and regulations
+3. **Case Law Application**: Apply relevant case law and precedents
+4. **Legal Principles**: Extract and explain key legal principles
+5. **Practical Implications**: Discuss practical legal implications and considerations
+6. **Risk Assessment**: Identify potential legal risks and limitations
+7. **Citation Format**: Use [Doc N] citations throughout your analysis
+8. **Professional Tone**: Maintain objective, professional legal analysis
 
-Answer:"""
-		
+Please provide a comprehensive legal analysis addressing the query above."""
+
 		try:
 			response = self.llm.invoke(prompt)
 			return response
 		except Exception as e:
 			logger.error(f"Error generating answer: {e}")
-			return f"Error generating answer: {e}"
+			return f"Error generating legal analysis: {e}. Please try again or consult with a legal professional."
 
 	def get_stats(self) -> dict:
 		"""Get current system statistics."""
