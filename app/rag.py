@@ -8,7 +8,8 @@ import logging
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import TextLoader
 from langchain_chroma import Chroma
-from langchain_ollama import ChatOllama, OllamaEmbeddings
+from langchain_ollama import ChatOllama
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.schema import Document
 from rank_bm25 import BM25Okapi
 from tqdm import tqdm
@@ -24,7 +25,7 @@ class RAGService:
 	def __init__(self) -> None:
 		logger.info("Initializing RAG Service...")
 		
-		# Initialize Ollama clients
+		# Initialize Ollama client for LLM
 		self.llm = ChatOllama(
 			model=settings.LLM_MODEL,
 			base_url=settings.OLLAMA_BASE_URL,
@@ -32,9 +33,11 @@ class RAGService:
 			timeout=settings.OLLAMA_REQUEST_TIMEOUT_S,
 		)
 		
-		self.embeddings = OllamaEmbeddings(
-			model=settings.EMBEDDING_MODEL,
-			base_url=settings.OLLAMA_BASE_URL,
+		# Initialize local embedding model using transformers
+		self.embeddings = HuggingFaceEmbeddings(
+			model_name=settings.EMBEDDING_MODEL,
+			model_kwargs={'device': 'cpu'},  # Use CPU by default, can be changed to 'cuda' if available
+			encode_kwargs={'normalize_embeddings': True}
 		)
 		
 		# Text processing
@@ -401,6 +404,56 @@ Content:
 		self._load_bm25()
 		
 		return {"files": len(all_files), "chunks": len(chunks)}
+
+	def ingest_files(self, files: List[Path]) -> Tuple[int, int]:
+		"""Ingest a list of files and return (file_count, chunk_count)."""
+		logger.info(f"Ingesting {len(files)} files...")
+		
+		if not files:
+			logger.warning("No files provided for ingestion")
+			return 0, 0
+		
+		# Load documents from files with progress bar
+		logger.info("Loading documents from files...")
+		all_docs = []
+		for file_path in tqdm(files, desc="Loading files", unit="file"):
+			docs = self._load_document(file_path)
+			all_docs.extend(docs)
+		
+		if not all_docs:
+			logger.warning("No documents loaded from files")
+			return len(files), 0
+		
+		# Split documents into chunks with progress bar
+		logger.info("Splitting documents into chunks...")
+		chunks = self.text_splitter.split_documents(all_docs)
+		logger.info(f"Created {len(chunks)} chunks from {len(all_docs)} documents")
+		
+		# Add to vector store with progress bar
+		try:
+			logger.info("Adding documents to vector store...")
+			vs = self._get_vectorstore()
+			
+			# Process in batches for better progress tracking
+			batch_size = 100
+			for i in tqdm(range(0, len(chunks), batch_size), desc="Adding to vector store", unit="batch"):
+				batch = chunks[i:i + batch_size]
+				vs.add_documents(batch)
+			
+			vs.persist()
+			logger.info("Documents added to vector store")
+		except Exception as e:
+			logger.error(f"Error adding to vector store: {e}")
+		
+		# Save to corpus for BM25
+		logger.info("Saving documents to corpus...")
+		self._save_corpus(chunks)
+		
+		# Build BM25 index
+		logger.info("Building BM25 index...")
+		self._load_bm25()
+		
+		return len(files), len(chunks)
 
 	def search(self, query: str, k: int | None = None) -> List[Document]:
 		"""Search for relevant documents using hybrid retrieval."""

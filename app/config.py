@@ -9,9 +9,9 @@ class Settings(BaseSettings):
 	OLLAMA_REQUEST_TIMEOUT_S: int = Field(default=300)
 	OLLAMA_KEEP_ALIVE_S: int = Field(default=300)
 
-	# Models (chat + embeddings via Ollama)
+	# Models (chat via Ollama, embeddings via local transformers)
 	LLM_MODEL: str = Field(default="gpt-oss:120b")
-	EMBEDDING_MODEL: str = Field(default="mxbai-embed-large")
+	EMBEDDING_MODEL: str = Field(default="sentence-transformers/all-MiniLM-L6-v2")
 
 	# Storage and data - relative paths
 	DATA_DIR: Path = Field(default=Path("data"))
