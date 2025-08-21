@@ -1,0 +1,32 @@
+[project]
+name = "lcur"
+version = "0.1.0"
+description = "Law RAG API"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+	"fastapi",
+	"uvicorn",
+	"langchain",
+	"langchain-community",
+	"langchain-openai",
+	"langchain-ollama",
+	"langchain-chroma",
+	"chromadb",
+	"pymupdf",
+	"bs4",
+	"docx2txt",
+	"rank-bm25",
+	"python-dotenv",
+	"requests",
+]
+
+[tool.uv]
+index-url = "https://pypi.org/simple"
+dev-dependencies = [
+	"pytest",
+	"httpx",
+]
+
+[tool.pytest.ini_options]
+addopts = "-q"
