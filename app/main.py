@@ -3,14 +3,32 @@ from __future__ import annotations
 from typing import Optional, List
 
 from fastapi import FastAPI, HTTPException, Depends
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .rag import RAGService
 from .config import settings
+from .production_config import prod_settings
 from langchain_ollama import ChatOllama
 
 
-app = FastAPI(title="Law RAG API", version="0.1.4")
+app = FastAPI(
+    title="Law RAG API", 
+    version="0.1.4",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json"
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=prod_settings.get_cors_origins(),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 _rag_service = RAGService()
 
 
@@ -46,6 +64,15 @@ class EmbedRequest(BaseModel):
 class ChatDiagRequest(BaseModel):
 	prompt: str
 
+
+@app.get("/")
+async def root():
+	return {
+		"message": "Law RAG API",
+		"version": "0.1.4",
+		"docs": "/docs",
+		"health": "/health"
+	}
 
 @app.get("/health")
 async def health():
