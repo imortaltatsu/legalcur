@@ -5,7 +5,7 @@ from pydantic import Field
 
 class Settings(BaseSettings):
 	# Ollama setup
-j	OLLAMA_BASE_URL: str = Field(default="http://localhost:11434")
+	OLLAMA_BASE_URL: str = Field(default="http://localhost:11434")
 	OLLAMA_REQUEST_TIMEOUT_S: int = Field(default=300)
 	OLLAMA_KEEP_ALIVE_S: int = Field(default=300)
 
